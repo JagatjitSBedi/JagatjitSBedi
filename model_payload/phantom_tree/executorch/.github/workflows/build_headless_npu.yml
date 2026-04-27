@@ -1,0 +1,27 @@
+name: Build Headless NPU Worker
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      
+      - name: Setup Android NDK (r25c)
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25c
+          
+      - name: Build C++ Worker via Bazel
+        run: |
+          bazelisk build -c opt --config=android_arm64 \
+          //android/app/src/main/cpp/headless_worker:npu_worker
+          
+      - name: Upload Native Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: npu_worker_arm64
+          path: bazel-bin/android/app/src/main/cpp/headless_worker/npu_worker
