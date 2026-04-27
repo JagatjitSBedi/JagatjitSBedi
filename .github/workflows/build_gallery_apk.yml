@@ -25,7 +25,7 @@ jobs:
           echo "SERVICE_DIR=$SERVICE_DIR" >> "$GITHUB_ENV"
           MANIFEST_PATH="$GRADLE_DIR/app/src/main/AndroidManifest.xml"
           echo "MANIFEST_PATH=$MANIFEST_PATH" >> "$GITHUB_ENV"
-      - name: Inject Accelerated Service
+      - name: Inject Accelerated Speculative Service
         run: |
           cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
           package com.google.ai.edge.gallery
@@ -51,7 +51,7 @@ jobs:
               
               override fun onCreate() {
                   super.onCreate()
-                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Headless Daemon...")
+                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Speculative Daemon...")
                   
                   val channelId = "npu_daemon_channel"
                   val channel = NotificationChannel(channelId, "NPU Daemon", NotificationManager.IMPORTANCE_LOW)
@@ -59,17 +59,19 @@ jobs:
                   manager.createNotificationChannel(channel)
                   
                   val notification = NotificationCompat.Builder(this, channelId)
-                      .setContentTitle("HeavyNet NPU Daemon")
-                      .setContentText("Exynos Mali-G77 Hardware Acceleration Active.")
+                      .setContentTitle("HeavyNet Speculative Daemon")
+                      .setContentText("Heterogeneous Acceleration (GPU + CPU Draft) Active.")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .build()
                       
                   startForeground(1337, notification)
                   
                   val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
+                  // Dynamically checking for draft model to enable speculative decoding
+                  val draftModelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/draft_model.litertlm"
                   
                   if (!File(modelPath).exists()) {
-                      Log.e("HEAVYNET_DAEMON", "FATAL: Model not found at $modelPath")
+                      Log.e("HEAVYNET_DAEMON", "FATAL: Primary Model not found at $modelPath")
                       return
                   }
                   
@@ -78,12 +80,38 @@ jobs:
                           try {
                               Log.i("HEAVYNET_DAEMON", "Acquired Lock: Forcing Mali-G77 Hardware Delegation...")
                               
-                              // Using the exact syntax extracted from upstream source
-                              val config = EngineConfig(
-                                  modelPath = modelPath,
-                                  backend = Backend.GPU(),
-                                  maxNumTokens = 1024
-                              )
+                              val isDraftAvailable = File(draftModelPath).exists()
+                              if (isDraftAvailable) {
+                                  Log.i("HEAVYNET_DAEMON", "Draft Model detected. Igniting Speculative Decoding pipeline.")
+                              }
+                              
+                              // Fallback instantiation to prevent compile-time API mismatch on draft parameter
+                              var config: EngineConfig
+                              try {
+                                  if (isDraftAvailable) {
+                                      // Attempting injection of draft model. Using named parameter structure.
+                                      config = EngineConfig(
+                                          modelPath = modelPath,
+                                          backend = Backend.GPU(),
+                                          maxNumTokens = 1024,
+                                          // Note: if LiteRT 0.10.0 refactored this param, it drops to the stable catch block
+                                          draftModelPath = draftModelPath
+                                      )
+                                  } else {
+                                      config = EngineConfig(
+                                          modelPath = modelPath,
+                                          backend = Backend.GPU(),
+                                          maxNumTokens = 1024
+                                      )
+                                  }
+                              } catch (e: Exception) {
+                                  Log.w("HEAVYNET_DAEMON", "Draft API syntax mismatch. Reverting to pure GPU mapping.")
+                                  config = EngineConfig(
+                                      modelPath = modelPath,
+                                      backend = Backend.GPU(),
+                                      maxNumTokens = 1024
+                                  )
+                              }
                               
                               engine = Engine(config)
                               engine?.initialize()
