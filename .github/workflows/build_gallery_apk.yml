@@ -1,141 +1,45 @@
-name: Build Android APK
+name: Build Gallery APK
 on:
   workflow_dispatch:
   push:
     paths:
-      - '.github/workflows/build_gallery_apk.yml'
-
+      - '.github/workflows/**'
 jobs:
   build:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Set up JDK 17
+      - name: Clone Repository
+        run: git clone -q https://github.com/google-ai-edge/gallery.git upstream_repo
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      - name: Setup Gradle Environment
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-
-      - name: Clone Google AI Edge, Inject Payload, and Build
+      - name: Setup Environment Variables
         run: |
-          echo "Cloning official Google AI Edge Gallery repository..."
-          git clone https://github.com/google-ai-edge/gallery.git upstream_repo
-          cd upstream_repo
-          
-          echo "Locating Gradle Root..."
-          GRADLE_PATH=$(find . -name "gradlew" -type f | head -n 1)
-          if [ -z "$GRADLE_PATH" ]; then
-            echo "::error::Could not locate gradlew in upstream repository."
-            exit 1
-          fi
-          BUILD_DIR=$(dirname "$GRADLE_PATH")
-          cd "$BUILD_DIR"
-          
-          echo "Locating Android Package Source..."
-          TARGET_DIR=$(find . -type d -path "*/src/main/*/com/google/ai/edge/gallery" | head -n 1)
-          
-          echo "Writing HeadlessNpuService.kt..."
-          cat << 'KOTLIN_EOF' > "$TARGET_DIR/HeadlessNpuService.kt"
-package com.google.ai.edge.gallery
-
-import android.app.Service
-import android.content.Intent
-import android.os.IBinder
-import android.util.Log
-import com.google.mediapipe.tasks.genai.llminference.LlmInference
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import java.io.File
-
-class HeadlessNpuService : Service() {
-    private var llmInference: LlmInference? = null
-
-    override fun onCreate() {
-        super.onCreate()
-        Log.i("HEAVYNET_DAEMON", "Service Created. Initializing MediaPipe LlmInference Engine...")
-        
-        val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
-        
-        if (!File(modelPath).exists()) {
-            Log.e("HEAVYNET_DAEMON", "FATAL: Model weights not found at $modelPath")
-            return
-        }
-
-        try {
-            val options = LlmInference.LlmInferenceOptions.builder()
-                .setModelPath(modelPath)
-                .setMaxTokens(1024)
-                .setTemperature(0.1f)
-                .build()
-
-            llmInference = LlmInference.createFromOptions(applicationContext, options)
-            Log.i("HEAVYNET_DAEMON", "NPU Ignition Successful. Engine Ready.")
-        } catch (e: Exception) {
-            Log.e("HEAVYNET_DAEMON", "Failed to initialize LlmInference: ${e.message}")
-        }
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val prompt = intent?.getStringExtra("HEAVYNET_PROMPT") ?: return START_NOT_STICKY
-
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                if (llmInference == null) {
-                    Log.e("HEAVYNET_OUTPUT", """{"status":"error", "message":"Engine not initialized."}""")
-                    return@launch
-                }
-                
-                val output = llmInference?.generateResponse(prompt)
-                val safeOutput = output?.replace("\"", "\\\"")?.replace("\n", "\\n")
-                Log.i("HEAVYNET_OUTPUT", """{"status":"success", "response":"$safeOutput"}""")
-                
-            } catch (e: Exception) {
-                Log.e("HEAVYNET_OUTPUT", """{"status":"error", "message":"${e.message}"}""")
-            }
-        }
-        return START_NOT_STICKY
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        llmInference?.close()
-        Log.i("HEAVYNET_DAEMON", "Service Destroyed. Hardware memory released.")
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
-}
-KOTLIN_EOF
-
-          echo "Patching AndroidManifest.xml..."
-          MANIFEST_PATH=$(find . -type f -name "AndroidManifest.xml" | grep "src/main" | head -n 1)
-          python3 -c "
-import xml.etree.ElementTree as ET
-import os
-
-manifest_path = '$MANIFEST_PATH'
-ET.register_namespace('android', 'http://schemas.android.com/apk/res/android')
-tree = ET.parse(manifest_path)
-root = tree.getroot()
-app = root.find('application')
-
-exists = any(svc.get('{http://schemas.android.com/apk/res/android}name') == '.HeadlessNpuService' for svc in app.findall('service'))
-if not exists:
-    svc = ET.SubElement(app, 'service')
-    svc.set('{http://schemas.android.com/apk/res/android}name', '.HeadlessNpuService')
-    svc.set('{http://schemas.android.com/apk/res/android}exported', 'true')
-    tree.write(manifest_path, encoding='utf-8', xml_declaration=True)
-"
-          
-          echo "Executing native build..."
+          GRADLE_DIR=$(find upstream_repo -name gradlew -exec dirname {} \; | head -n 1)
+          echo "GRADLE_DIR=$GRADLE_DIR" >> $GITHUB_ENV
+          SERVICE_DIR=$(find upstream_repo -path "*/com/google/ai/edge/gallery" -type d | head -n 1)
+          echo "SERVICE_DIR=$SERVICE_DIR" >> $GITHUB_ENV
+          MANIFEST_PATH=$(find upstream_repo -name AndroidManifest.xml | grep src/main | head -n 1)
+          echo "MANIFEST_PATH=$MANIFEST_PATH" >> $GITHUB_ENV
+      - name: Inject Service
+        run: |
+          cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
+          package com.google.ai.edge.gallery; import android.app.Service; import android.content.Intent; import android.os.IBinder; import android.util.Log; import com.google.mediapipe.tasks.genai.llminference.LlmInference; import kotlinx.coroutines.CoroutineScope; import kotlinx.coroutines.Dispatchers; import kotlinx.coroutines.launch; import java.io.File; class HeadlessNpuService : Service() { private var llmInference: LlmInference? = null; override fun onCreate() { super.onCreate(); Log.i("HEAVYNET_DAEMON", "Service Created."); val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"; if (!File(modelPath).exists()) { Log.e("HEAVYNET_DAEMON", "FATAL: Model not found"); return }; try { val options = LlmInference.LlmInferenceOptions.builder().setModelPath(modelPath).setMaxTokens(1024).setTemperature(0.1f).build(); llmInference = LlmInference.createFromOptions(applicationContext, options); Log.i("HEAVYNET_DAEMON", "Engine Ready.") } catch (e: Exception) { Log.e("HEAVYNET_DAEMON", "Init Failed: \${e.message}") } }; override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int { val prompt = intent?.getStringExtra("HEAVYNET_PROMPT") ?: return START_NOT_STICKY; CoroutineScope(Dispatchers.IO).launch { try { if (llmInference == null) { Log.e("HEAVYNET_OUTPUT", "Engine null"); return@launch }; val output = llmInference?.generateResponse(prompt); val safeOutput = output?.replace("\"", "\\\"")?.replace("\n", "\\n"); Log.i("HEAVYNET_OUTPUT", "{\"status\":\"success\", \"response\":\"\$safeOutput\"}") } catch (e: Exception) { Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"\${e.message}\"}") } }; return START_NOT_STICKY }; override fun onDestroy() { super.onDestroy(); llmInference?.close() }; override fun onBind(intent: Intent?): IBinder? = null }
+          KOTLIN_EOF
+      - name: Patch Manifest
+        run: |
+          sed -i 's|</application>|<service android:name=".HeadlessNpuService" android:exported="true" />\n</application>|g' ${{ env.MANIFEST_PATH }}
+      - name: Build APK
+        run: |
+          cd ${{ env.GRADLE_DIR }}
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
-
-      - name: Upload APK Artifact
+          ./gradlew assembleDebug --no-daemon -q
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: gallery-app-debug
-          path: upstream_repo/**/app/build/outputs/apk/debug/*.apk
+          name: apk-files
+          path: **/*.apk
