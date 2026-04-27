@@ -25,7 +25,7 @@ jobs:
           echo "SERVICE_DIR=$SERVICE_DIR" >> "$GITHUB_ENV"
           MANIFEST_PATH="$GRADLE_DIR/app/src/main/AndroidManifest.xml"
           echo "MANIFEST_PATH=$MANIFEST_PATH" >> "$GITHUB_ENV"
-      - name: Inject File-Backed Service
+      - name: Inject Lazy-Init Service
         run: |
           cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
           package com.google.ai.edge.gallery
@@ -49,10 +49,11 @@ jobs:
               private var engine: Engine? = null
               private val engineMutex = Mutex()
               private val outputPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/omni_response.json"
+              private val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
               
               override fun onCreate() {
                   super.onCreate()
-                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Stable IPC Daemon...")
+                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Lazy IPC Daemon...")
                   
                   val channelId = "npu_daemon_channel"
                   val channel = NotificationChannel(channelId, "NPU Daemon", NotificationManager.IMPORTANCE_LOW)
@@ -61,35 +62,12 @@ jobs:
                   
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("HeavyNet IPC Daemon")
-                      .setContentText("Exynos GPU Bound. Stable Mode.")
+                      .setContentText("Exynos GPU Bound. Lazy Init Active.")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .build()
                       
                   startForeground(1337, notification)
-                  
-                  val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
-                  
-                  CoroutineScope(Dispatchers.IO).launch {
-                      engineMutex.withLock {
-                          try {
-                              Log.i("HEAVYNET_DAEMON", "Acquired Lock: Forcing Mali-G77 Hardware Delegation...")
-                              val config = EngineConfig(
-                                  modelPath = modelPath,
-                                  backend = Backend.GPU(),
-                                  maxNumTokens = 1024 
-                              )
-                              
-                              val tempEngine = Engine(config)
-                              tempEngine.initialize()
-                              engine = tempEngine
-                              
-                              Log.i("HEAVYNET_DAEMON", "Engine Ready. Hardware Locks Released.")
-                          } catch (e: Exception) {
-                              Log.e("HEAVYNET_DAEMON", "Init Failed: ${e.message}")
-                              engine = null
-                          }
-                      }
-                  }
+                  // DELIBERATELY NO ASYNC EXECUTION HERE TO PREVENT RACE CONDITIONS
               }
               
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -99,21 +77,35 @@ jobs:
                           try {
                               File(outputPath).delete()
                               
+                              // LAZY INITIALIZATION BLOCK
                               if (engine == null) {
-                                  File(outputPath).writeText("{\"status\":\"error\", \"message\":\"Engine failed to load into GPU memory. Check logcat.\"}")
-                                  return@launch
+                                  Log.i("HEAVYNET_DAEMON", "Engine uninitialized. Forcing Mali-G77 Hardware Map (Cold Boot)...")
+                                  if (!File(modelPath).exists()) {
+                                      throw Exception("Tensor file missing at \$modelPath")
+                                  }
+                                  val config = EngineConfig(
+                                      modelPath = modelPath,
+                                      backend = Backend.GPU(),
+                                      maxNumTokens = 1024 
+                                  )
+                                  val tempEngine = Engine(config)
+                                  tempEngine.initialize()
+                                  engine = tempEngine
+                                  Log.i("HEAVYNET_DAEMON", "Cold Boot Complete. Hardware Locks Released.")
                               }
+                              
                               Log.i("HEAVYNET_DAEMON", "Lock Acquired: Igniting Accelerated Inference.")
                               val conversation = engine!!.createConversation()
                               val output = conversation.sendMessage(prompt)
                               val safeOutput = output.toString().replace("\"", "\\\"").replace("\n", "\\n")
                               
-                              File(outputPath).writeText("{\"status\":\"success\", \"response\":\"$safeOutput\"}")
+                              File(outputPath).writeText("{\"status\":\"success\", \"response\":\"\$safeOutput\"}")
                               Log.i("HEAVYNET_DAEMON", "Inference Complete. Payload safely written to disk.")
                               
                               conversation.close()
                           } catch (e: Exception) {
-                              File(outputPath).writeText("{\"status\":\"error\", \"message\":\"${e.message}\"}")
+                              File(outputPath).writeText("{\"status\":\"error\", \"message\":\"\${e.message}\"}")
+                              Log.e("HEAVYNET_DAEMON", "Inference Failed: \${e.message}")
                           }
                       }
                   }
