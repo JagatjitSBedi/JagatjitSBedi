@@ -21,19 +21,27 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Dynamically Locate and Build APK
+      - name: Setup Gradle Environment
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Dynamically Generate Wrapper and Build APK
         run: |
-          # Find the exact folder containing the Gradle wrapper
-          GRADLE_PATH=$(find . -name "gradlew" -type f | head -n 1)
-          if [ -z "$GRADLE_PATH" ]; then
-            echo "::error::Could not locate gradlew in the repository."
+          # Find the exact folder containing the root build.gradle or settings.gradle
+          BUILD_ROOT=$(find . -name "build.gradle" -o -name "settings.gradle" -o -name "build.gradle.kts" | head -n 1)
+          if [ -z "$BUILD_ROOT" ]; then
+            echo "::error::Could not locate build.gradle or settings.gradle in the repository."
             exit 1
           fi
           
-          BUILD_DIR=$(dirname "$GRADLE_PATH")
-          echo "Found Gradle root at: $BUILD_DIR"
+          BUILD_DIR=$(dirname "$BUILD_ROOT")
+          echo "Found Project Root at: $BUILD_DIR"
           
           cd "$BUILD_DIR"
+          
+          # Generate the wrapper locally in the runner
+          gradle wrapper
+          
+          # Ensure execution permissions and build
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
