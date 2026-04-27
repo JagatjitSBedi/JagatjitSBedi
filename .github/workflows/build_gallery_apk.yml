@@ -25,7 +25,7 @@ jobs:
           echo "SERVICE_DIR=$SERVICE_DIR" >> "$GITHUB_ENV"
           MANIFEST_PATH="$GRADLE_DIR/app/src/main/AndroidManifest.xml"
           echo "MANIFEST_PATH=$MANIFEST_PATH" >> "$GITHUB_ENV"
-      - name: Inject Patched Service
+      - name: Inject File-Backed Service
         run: |
           cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
           package com.google.ai.edge.gallery
@@ -52,7 +52,7 @@ jobs:
               
               override fun onCreate() {
                   super.onCreate()
-                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to IPC File Daemon...")
+                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Stable IPC Daemon...")
                   
                   val channelId = "npu_daemon_channel"
                   val channel = NotificationChannel(channelId, "NPU Daemon", NotificationManager.IMPORTANCE_LOW)
@@ -61,18 +61,13 @@ jobs:
                   
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("HeavyNet IPC Daemon")
-                      .setContentText("Exynos GPU Bound. VRAM Limits Enforced.")
+                      .setContentText("Exynos GPU Bound. Stable Mode.")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .build()
                       
                   startForeground(1337, notification)
                   
                   val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
-                  
-                  if (!File(modelPath).exists()) {
-                      Log.e("HEAVYNET_DAEMON", "FATAL: Model not found at $modelPath")
-                      return
-                  }
                   
                   CoroutineScope(Dispatchers.IO).launch {
                       engineMutex.withLock {
@@ -81,10 +76,9 @@ jobs:
                               val config = EngineConfig(
                                   modelPath = modelPath,
                                   backend = Backend.GPU(),
-                                  maxNumTokens = 1024 // REVERTED TO PREVENT OPENCL VRAM OVERFLOW
+                                  maxNumTokens = 1024 
                               )
                               
-                              // ATOMIC ASSIGNMENT: Only assign to global if initialization succeeds
                               val tempEngine = Engine(config)
                               tempEngine.initialize()
                               engine = tempEngine
@@ -106,8 +100,7 @@ jobs:
                               File(outputPath).delete()
                               
                               if (engine == null) {
-                                  File(outputPath).writeText("{\"status\":\"error\", \"message\":\"Engine failed to load into GPU memory. Check logs.\"}")
-                                  Log.e("HEAVYNET_DAEMON", "Engine null. Error written to file.")
+                                  File(outputPath).writeText("{\"status\":\"error\", \"message\":\"Engine failed to load into GPU memory. Check logcat.\"}")
                                   return@launch
                               }
                               Log.i("HEAVYNET_DAEMON", "Lock Acquired: Igniting Accelerated Inference.")
@@ -121,7 +114,6 @@ jobs:
                               conversation.close()
                           } catch (e: Exception) {
                               File(outputPath).writeText("{\"status\":\"error\", \"message\":\"${e.message}\"}")
-                              Log.e("HEAVYNET_DAEMON", "Inference Failed. Error written to file.")
                           }
                       }
                   }
@@ -131,7 +123,6 @@ jobs:
               override fun onDestroy() {
                   super.onDestroy()
                   engine?.close()
-                  Log.i("HEAVYNET_DAEMON", "Service Destroyed. Hardware memory released.")
               }
               
               override fun onBind(intent: Intent?): IBinder? = null
