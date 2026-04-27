@@ -3,14 +3,11 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'agent_workspaces/ai_edge_gallery/gallery/Android/src/**'
+      - 'agent_workspaces/ai_edge_gallery/gallery/**'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: agent_workspaces/ai_edge_gallery/gallery/Android/src
     
     steps:
       - name: Checkout Repository
@@ -24,14 +21,24 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Grant Execute Permission for Gradle
-        run: chmod +x gradlew
-
-      - name: Build APK (assembleDebug)
-        run: ./gradlew assembleDebug --no-daemon
+      - name: Dynamically Locate and Build APK
+        run: |
+          # Find the exact folder containing the Gradle wrapper
+          GRADLE_PATH=$(find . -name "gradlew" -type f | head -n 1)
+          if [ -z "$GRADLE_PATH" ]; then
+            echo "::error::Could not locate gradlew in the repository."
+            exit 1
+          fi
+          
+          BUILD_DIR=$(dirname "$GRADLE_PATH")
+          echo "Found Gradle root at: $BUILD_DIR"
+          
+          cd "$BUILD_DIR"
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gallery-app-debug
-          path: agent_workspaces/ai_edge_gallery/gallery/Android/src/app/build/outputs/apk/debug/*.apk
+          path: agent_workspaces/ai_edge_gallery/gallery/Android/**/app/build/outputs/apk/debug/*.apk
