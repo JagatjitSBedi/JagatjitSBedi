@@ -25,7 +25,7 @@ jobs:
           echo "SERVICE_DIR=$SERVICE_DIR" >> "$GITHUB_ENV"
           MANIFEST_PATH="$GRADLE_DIR/app/src/main/AndroidManifest.xml"
           echo "MANIFEST_PATH=$MANIFEST_PATH" >> "$GITHUB_ENV"
-      - name: Inject File-Backed Accelerated Service
+      - name: Inject Patched Service
         run: |
           cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
           package com.google.ai.edge.gallery
@@ -61,7 +61,7 @@ jobs:
                   
                   val notification = NotificationCompat.Builder(this, channelId)
                       .setContentTitle("HeavyNet IPC Daemon")
-                      .setContentText("Exynos GPU Bound. File I/O Transport Active.")
+                      .setContentText("Exynos GPU Bound. VRAM Limits Enforced.")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .build()
                       
@@ -81,13 +81,18 @@ jobs:
                               val config = EngineConfig(
                                   modelPath = modelPath,
                                   backend = Backend.GPU(),
-                                  maxNumTokens = 2048
+                                  maxNumTokens = 1024 // REVERTED TO PREVENT OPENCL VRAM OVERFLOW
                               )
-                              engine = Engine(config)
-                              engine?.initialize()
+                              
+                              // ATOMIC ASSIGNMENT: Only assign to global if initialization succeeds
+                              val tempEngine = Engine(config)
+                              tempEngine.initialize()
+                              engine = tempEngine
+                              
                               Log.i("HEAVYNET_DAEMON", "Engine Ready. Hardware Locks Released.")
                           } catch (e: Exception) {
                               Log.e("HEAVYNET_DAEMON", "Init Failed: ${e.message}")
+                              engine = null
                           }
                       }
                   }
@@ -98,11 +103,10 @@ jobs:
                   CoroutineScope(Dispatchers.IO).launch {
                       engineMutex.withLock {
                           try {
-                              // Clear previous response file
                               File(outputPath).delete()
                               
                               if (engine == null) {
-                                  File(outputPath).writeText("{\"status\":\"error\", \"message\":\"Engine null after lock release.\"}")
+                                  File(outputPath).writeText("{\"status\":\"error\", \"message\":\"Engine failed to load into GPU memory. Check logs.\"}")
                                   Log.e("HEAVYNET_DAEMON", "Engine null. Error written to file.")
                                   return@launch
                               }
@@ -111,7 +115,6 @@ jobs:
                               val output = conversation.sendMessage(prompt)
                               val safeOutput = output.toString().replace("\"", "\\\"").replace("\n", "\\n")
                               
-                              // WRITE MASSIVE PAYLOAD DIRECTLY TO SHARED STORAGE TO BYPASS 4KB LOGCAT LIMIT
                               File(outputPath).writeText("{\"status\":\"success\", \"response\":\"$safeOutput\"}")
                               Log.i("HEAVYNET_DAEMON", "Inference Complete. Payload safely written to disk.")
                               
