@@ -50,7 +50,6 @@ jobs:
                   super.onCreate()
                   Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Headless Daemon...")
                   
-                  // Create silent notification channel to bypass Android background limits
                   val channelId = "npu_daemon_channel"
                   val channel = NotificationChannel(channelId, "NPU Daemon", NotificationManager.IMPORTANCE_LOW)
                   val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -71,13 +70,17 @@ jobs:
                       return
                   }
                   
-                  try {
-                      val config = EngineConfig(modelPath = modelPath)
-                      engine = Engine(config)
-                      engine?.initialize()
-                      Log.i("HEAVYNET_DAEMON", "Engine Ready. Persistent RAM caching active.")
-                  } catch (e: Exception) {
-                      Log.e("HEAVYNET_DAEMON", "Init Failed: ${e.message}")
+                  // DELEGATING 4GB I/O MAP TO BACKGROUND THREAD TO PREVENT ANR WATCHDOG KILL
+                  CoroutineScope(Dispatchers.IO).launch {
+                      try {
+                          Log.i("HEAVYNET_DAEMON", "Initiating 4GB Tensor I/O Map on Background Thread...")
+                          val config = EngineConfig(modelPath = modelPath)
+                          engine = Engine(config)
+                          engine?.initialize()
+                          Log.i("HEAVYNET_DAEMON", "Engine Ready. Persistent RAM caching active.")
+                      } catch (e: Exception) {
+                          Log.e("HEAVYNET_DAEMON", "Init Failed: ${e.message}")
+                      }
                   }
               }
               
@@ -86,7 +89,7 @@ jobs:
                   CoroutineScope(Dispatchers.IO).launch {
                       try {
                           if (engine == null) {
-                              Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"Engine null\"}")
+                              Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"Engine is still loading tensors. Please hold.\"}")
                               return@launch
                           }
                           val conversation = engine!!.createConversation()
@@ -112,9 +115,7 @@ jobs:
           KOTLIN_EOF
       - name: Patch Manifest
         run: |
-          # Inject Foreground Service permission into manifest
           sed -i 's|<application|<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n<application|g' ${{ env.MANIFEST_PATH }}
-          # Register the service
           sed -i 's|</application>|<service android:name="com.google.ai.edge.gallery.HeadlessNpuService" android:exported="true" />\n</application>|g' ${{ env.MANIFEST_PATH }}
       - name: Build APK
         run: |
