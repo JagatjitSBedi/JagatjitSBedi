@@ -19,7 +19,6 @@ jobs:
         uses: gradle/actions/setup-gradle@v3
       - name: Setup Environment Variables
         run: |
-          # Deterministic path mapping
           GRADLE_DIR="upstream_repo/Android/src"
           echo "GRADLE_DIR=$GRADLE_DIR" >> "$GITHUB_ENV"
           SERVICE_DIR="$GRADLE_DIR/app/src/main/java/com/google/ai/edge/gallery"
@@ -94,7 +93,6 @@ jobs:
           KOTLIN_EOF
       - name: Patch Manifest
         run: |
-          # Use fully qualified class name to eliminate namespace ambiguities
           sed -i 's|</application>|<service android:name="com.google.ai.edge.gallery.HeadlessNpuService" android:exported="true" />\n</application>|g' ${{ env.MANIFEST_PATH }}
       - name: Build APK
         run: |
