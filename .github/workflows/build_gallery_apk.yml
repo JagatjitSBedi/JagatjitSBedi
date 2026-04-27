@@ -25,7 +25,7 @@ jobs:
           echo "SERVICE_DIR=$SERVICE_DIR" >> "$GITHUB_ENV"
           MANIFEST_PATH="$GRADLE_DIR/app/src/main/AndroidManifest.xml"
           echo "MANIFEST_PATH=$MANIFEST_PATH" >> "$GITHUB_ENV"
-      - name: Inject Accelerated Service
+      - name: Inject File-Backed Accelerated Service
         run: |
           cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
           package com.google.ai.edge.gallery
@@ -48,10 +48,11 @@ jobs:
           class HeadlessNpuService : Service() {
               private var engine: Engine? = null
               private val engineMutex = Mutex()
+              private val outputPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/omni_response.json"
               
               override fun onCreate() {
                   super.onCreate()
-                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to Headless Daemon...")
+                  Log.i("HEAVYNET_DAEMON", "Service Created. Elevating to IPC File Daemon...")
                   
                   val channelId = "npu_daemon_channel"
                   val channel = NotificationChannel(channelId, "NPU Daemon", NotificationManager.IMPORTANCE_LOW)
@@ -59,8 +60,8 @@ jobs:
                   manager.createNotificationChannel(channel)
                   
                   val notification = NotificationCompat.Builder(this, channelId)
-                      .setContentTitle("HeavyNet NPU Daemon")
-                      .setContentText("Exynos Mali-G77 Hardware Acceleration Active.")
+                      .setContentTitle("HeavyNet IPC Daemon")
+                      .setContentText("Exynos GPU Bound. File I/O Transport Active.")
                       .setSmallIcon(android.R.drawable.ic_dialog_info)
                       .build()
                       
@@ -77,13 +78,11 @@ jobs:
                       engineMutex.withLock {
                           try {
                               Log.i("HEAVYNET_DAEMON", "Acquired Lock: Forcing Mali-G77 Hardware Delegation...")
-                              
                               val config = EngineConfig(
                                   modelPath = modelPath,
                                   backend = Backend.GPU(),
-                                  maxNumTokens = 1024
+                                  maxNumTokens = 2048
                               )
-                              
                               engine = Engine(config)
                               engine?.initialize()
                               Log.i("HEAVYNET_DAEMON", "Engine Ready. Hardware Locks Released.")
@@ -99,18 +98,27 @@ jobs:
                   CoroutineScope(Dispatchers.IO).launch {
                       engineMutex.withLock {
                           try {
+                              // Clear previous response file
+                              File(outputPath).delete()
+                              
                               if (engine == null) {
-                                  Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"Engine null after lock release.\"}")
+                                  File(outputPath).writeText("{\"status\":\"error\", \"message\":\"Engine null after lock release.\"}")
+                                  Log.e("HEAVYNET_DAEMON", "Engine null. Error written to file.")
                                   return@launch
                               }
                               Log.i("HEAVYNET_DAEMON", "Lock Acquired: Igniting Accelerated Inference.")
                               val conversation = engine!!.createConversation()
                               val output = conversation.sendMessage(prompt)
                               val safeOutput = output.toString().replace("\"", "\\\"").replace("\n", "\\n")
-                              Log.i("HEAVYNET_OUTPUT", "{\"status\":\"success\", \"response\":\"$safeOutput\"}")
+                              
+                              // WRITE MASSIVE PAYLOAD DIRECTLY TO SHARED STORAGE TO BYPASS 4KB LOGCAT LIMIT
+                              File(outputPath).writeText("{\"status\":\"success\", \"response\":\"$safeOutput\"}")
+                              Log.i("HEAVYNET_DAEMON", "Inference Complete. Payload safely written to disk.")
+                              
                               conversation.close()
                           } catch (e: Exception) {
-                              Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"${e.message}\"}")
+                              File(outputPath).writeText("{\"status\":\"error\", \"message\":\"${e.message}\"}")
+                              Log.e("HEAVYNET_DAEMON", "Inference Failed. Error written to file.")
                           }
                       }
                   }
