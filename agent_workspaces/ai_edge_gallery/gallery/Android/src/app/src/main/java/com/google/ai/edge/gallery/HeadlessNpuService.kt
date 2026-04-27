@@ -72,3 +72,4 @@ class HeadlessNpuService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 }
 // Cloud APK trigger: Mon Apr 27 14:37:30 IST 2026
+// Cache bypass trigger: Mon Apr 27 14:47:07 IST 2026
