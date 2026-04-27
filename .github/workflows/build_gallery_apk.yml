@@ -41,10 +41,13 @@ jobs:
           import kotlinx.coroutines.CoroutineScope
           import kotlinx.coroutines.Dispatchers
           import kotlinx.coroutines.launch
+          import kotlinx.coroutines.sync.Mutex
+          import kotlinx.coroutines.sync.withLock
           import java.io.File
           
           class HeadlessNpuService : Service() {
               private var engine: Engine? = null
+              private val engineMutex = Mutex()
               
               override fun onCreate() {
                   super.onCreate()
@@ -70,16 +73,17 @@ jobs:
                       return
                   }
                   
-                  // DELEGATING 4GB I/O MAP TO BACKGROUND THREAD TO PREVENT ANR WATCHDOG KILL
                   CoroutineScope(Dispatchers.IO).launch {
-                      try {
-                          Log.i("HEAVYNET_DAEMON", "Initiating 4GB Tensor I/O Map on Background Thread...")
-                          val config = EngineConfig(modelPath = modelPath)
-                          engine = Engine(config)
-                          engine?.initialize()
-                          Log.i("HEAVYNET_DAEMON", "Engine Ready. Persistent RAM caching active.")
-                      } catch (e: Exception) {
-                          Log.e("HEAVYNET_DAEMON", "Init Failed: ${e.message}")
+                      engineMutex.withLock {
+                          try {
+                              Log.i("HEAVYNET_DAEMON", "Acquired Lock: Initiating 4GB Tensor I/O Map...")
+                              val config = EngineConfig(modelPath = modelPath)
+                              engine = Engine(config)
+                              engine?.initialize()
+                              Log.i("HEAVYNET_DAEMON", "Engine Ready. Releasing Lock.")
+                          } catch (e: Exception) {
+                              Log.e("HEAVYNET_DAEMON", "Init Failed: ${e.message}")
+                          }
                       }
                   }
               }
@@ -87,18 +91,22 @@ jobs:
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val prompt = intent?.getStringExtra("HEAVYNET_PROMPT") ?: return START_NOT_STICKY
                   CoroutineScope(Dispatchers.IO).launch {
-                      try {
-                          if (engine == null) {
-                              Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"Engine is still loading tensors. Please hold.\"}")
-                              return@launch
+                      Log.i("HEAVYNET_DAEMON", "Intent Received: Awaiting execution queue...")
+                      engineMutex.withLock {
+                          try {
+                              if (engine == null) {
+                                  Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"Engine null after lock release.\"}")
+                                  return@launch
+                              }
+                              Log.i("HEAVYNET_DAEMON", "Lock Acquired: Igniting Inference.")
+                              val conversation = engine!!.createConversation()
+                              val output = conversation.sendMessage(prompt)
+                              val safeOutput = output.toString().replace("\"", "\\\"").replace("\n", "\\n")
+                              Log.i("HEAVYNET_OUTPUT", "{\"status\":\"success\", \"response\":\"$safeOutput\"}")
+                              conversation.close()
+                          } catch (e: Exception) {
+                              Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"${e.message}\"}")
                           }
-                          val conversation = engine!!.createConversation()
-                          val output = conversation.sendMessage(prompt)
-                          val safeOutput = output.toString().replace("\"", "\\\"").replace("\n", "\\n")
-                          Log.i("HEAVYNET_OUTPUT", "{\"status\":\"success\", \"response\":\"$safeOutput\"}")
-                          conversation.close()
-                      } catch (e: Exception) {
-                          Log.e("HEAVYNET_OUTPUT", "{\"status\":\"error\", \"message\":\"${e.message}\"}")
                       }
                   }
                   return START_NOT_STICKY
