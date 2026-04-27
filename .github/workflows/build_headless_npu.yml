@@ -3,28 +3,32 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'uds_worker/**'
+      - 'model_payload/phantom_tree/executorch/android/app/src/main/cpp/headless_worker/**'
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       
       - name: Setup Android NDK (r25c)
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r25c
           
-      - name: Cross-Compile C++ for Exynos aarch64
+      - name: Build C++ Worker via Bazel
         run: |
-          $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android33-clang++ \
-          -O3 -std=c++17 -pie -fPIE \
-          uds_worker/main.cpp \
-          -o npu_worker
+          # Navigate into the subfolder where the Google workspace lives
+          cd model_payload/phantom_tree/executorch
+          
+          # Build the target
+          bazelisk build -c opt --config=android_arm64 \
+          //android/app/src/main/cpp/headless_worker:npu_worker
           
       - name: Upload Native Binary Artifact
         uses: actions/upload-artifact@v4
         with:
           name: npu_worker_arm64
-          path: npu_worker
+          path: model_payload/phantom_tree/executorch/bazel-bin/android/app/src/main/cpp/headless_worker/npu_worker
