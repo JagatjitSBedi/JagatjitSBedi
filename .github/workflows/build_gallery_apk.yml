@@ -45,6 +45,7 @@ jobs:
               private var engine: Engine? = null
               private var activeConversation: Conversation? = null
               private val hardwareExecutor = Executors.newSingleThreadExecutor()
+              private val inputPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/omni_prompt.txt"
               private val outputPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/omni_response.json"
               private val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
               
@@ -57,9 +58,23 @@ jobs:
               }
               
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-                  val prompt = intent?.getStringExtra("HEAVYNET_PROMPT") ?: return START_NOT_STICKY
                   hardwareExecutor.execute {
+                      var prompt = intent?.getStringExtra("HEAVYNET_PROMPT")
+                      val inputFile = File(inputPath)
+                      
+                      // File-Based IPC priority override
+                      if (inputFile.exists()) {
+                          prompt = inputFile.readText()
+                          inputFile.delete() 
+                      }
+                      
+                      if (prompt.isNullOrEmpty()) {
+                          Log.e("HEAVYNET_DAEMON", "No prompt received via Intent or File.")
+                          return@execute
+                      }
+
                       File(outputPath).delete()
+                      
                       try {
                           if (engine == null) {
                               Log.i("HEAVYNET_DAEMON", "Initiating Mali-G77 Map (Isolated PID)...")
@@ -70,7 +85,6 @@ jobs:
                               Log.i("HEAVYNET_DAEMON", "Hardware Locks Acquired Successfully.")
                           }
                           
-                          // STRICT MEMORY MANAGEMENT: Flush C++ pointer before creating new session
                           activeConversation?.close()
                           activeConversation = engine!!.createConversation()
                           
