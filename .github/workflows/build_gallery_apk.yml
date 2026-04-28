@@ -25,7 +25,7 @@ jobs:
           echo "SERVICE_DIR=$SERVICE_DIR" >> "$GITHUB_ENV"
           MANIFEST_PATH="$GRADLE_DIR/app/src/main/AndroidManifest.xml"
           echo "MANIFEST_PATH=$MANIFEST_PATH" >> "$GITHUB_ENV"
-      - name: Inject Synchronous Service
+      - name: Inject Isolated Multi-Process Service
         run: |
           cat << 'KOTLIN_EOF' > ${{ env.SERVICE_DIR }}/HeadlessNpuService.kt
           package com.google.ai.edge.gallery
@@ -39,56 +39,60 @@ jobs:
           import androidx.core.app.NotificationCompat
           import com.google.ai.edge.litertlm.*
           import java.io.File
+          import java.util.concurrent.Executors
           
           class HeadlessNpuService : Service() {
               private var engine: Engine? = null
+              private val hardwareExecutor = Executors.newSingleThreadExecutor()
               private val outputPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/omni_response.json"
               private val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
               
               override fun onCreate() {
                   super.onCreate()
-                  val channelId = "npu_daemon_channel"
-                  val channel = NotificationChannel(channelId, "NPU Daemon", NotificationManager.IMPORTANCE_LOW)
+                  val channelId = "npu_daemon_worker"
+                  val channel = NotificationChannel(channelId, "NPU Isolated Worker", NotificationManager.IMPORTANCE_LOW)
                   getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-                  startForeground(1337, NotificationCompat.Builder(this, channelId).setContentTitle("HeavyNet IPC").setContentText("Synchronous Init Active.").setSmallIcon(android.R.drawable.ic_dialog_info).build())
+                  startForeground(1337, NotificationCompat.Builder(this, channelId).setContentTitle("HeavyNet IPC").setContentText("Isolated Process Active.").setSmallIcon(android.R.drawable.ic_dialog_info).build())
               }
               
               override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
                   val prompt = intent?.getStringExtra("HEAVYNET_PROMPT") ?: return START_NOT_STICKY
-                  File(outputPath).delete()
                   
-                  try {
-                      if (engine == null) {
-                          Log.i("HEAVYNET_DAEMON", "Initiating Synchronous Mali-G77 Map...")
-                          val config = EngineConfig(modelPath = modelPath, backend = Backend.GPU(), maxNumTokens = 1024)
-                          val tempEngine = Engine(config)
-                          tempEngine.initialize() // STRICT BLOCKING CALL
-                          engine = tempEngine
-                          Log.i("HEAVYNET_DAEMON", "Hardware Locks Acquired Successfully.")
+                  hardwareExecutor.execute {
+                      File(outputPath).delete()
+                      try {
+                          if (engine == null) {
+                              Log.i("HEAVYNET_DAEMON", "Initiating Mali-G77 Map (Isolated PID)...")
+                              val config = EngineConfig(modelPath = modelPath, backend = Backend.GPU(), maxNumTokens = 1024)
+                              val tempEngine = Engine(config)
+                              tempEngine.initialize() 
+                              engine = tempEngine
+                              Log.i("HEAVYNET_DAEMON", "Hardware Locks Acquired Successfully in Sub-Process.")
+                          }
+                          val response = engine!!.createConversation().sendMessage(prompt)
+                          File(outputPath).writeText("{\"status\":\"success\", \"response\":\"${response.toString().replace("\"", "\\\"").replace("\n", "\\n")}\"}")
+                      } catch (e: Exception) {
+                          Log.e("HEAVYNET_DAEMON", "NATIVE INIT CRASH: ${e.message}")
+                          File(outputPath).writeText("{\"status\":\"error\", \"message\":\"${e.message}\"}")
                       }
-                      
-                      val response = engine!!.createConversation().sendMessage(prompt)
-                      File(outputPath).writeText("{\"status\":\"success\", \"response\":\"${response.toString().replace("\"", "\\\"").replace("\n", "\\n")}\"}")
-                  } catch (e: Exception) {
-                      Log.e("HEAVYNET_DAEMON", "NATIVE INIT CRASH: ${e.message}")
-                      File(outputPath).writeText("{\"status\":\"error\", \"message\":\"${e.message}\"}")
                   }
-                  
                   return START_NOT_STICKY
               }
               
               override fun onDestroy() {
                   super.onDestroy()
+                  hardwareExecutor.shutdown()
                   engine?.close()
               }
               
               override fun onBind(intent: Intent?): IBinder? = null
           }
           KOTLIN_EOF
-      - name: Patch Manifest
+      - name: Patch Manifest (Injecting android:process)
         run: |
           sed -i 's|<application|<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n<application|g' ${{ env.MANIFEST_PATH }}
-          sed -i 's|</application>|<service android:name="com.google.ai.edge.gallery.HeadlessNpuService" android:exported="true" />\n</application>|g' ${{ env.MANIFEST_PATH }}
+          # The :npu_worker attribute tells Android to fork this Service into a completely separate Linux PID
+          sed -i 's|</application>|<service android:name="com.google.ai.edge.gallery.HeadlessNpuService" android:exported="true" android:process=":npu_worker" />\n</application>|g' ${{ env.MANIFEST_PATH }}
       - name: Build APK
         run: |
           cd ${{ env.GRADLE_DIR }}
