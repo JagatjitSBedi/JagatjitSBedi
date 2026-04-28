@@ -43,6 +43,7 @@ jobs:
           
           class HeadlessNpuService : Service() {
               private var engine: Engine? = null
+              private var activeConversation: Conversation? = null
               private val hardwareExecutor = Executors.newSingleThreadExecutor()
               private val outputPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/omni_response.json"
               private val modelPath = "/sdcard/Android/data/com.google.aiedge.gallery/files/Gemma_4_E4B_it/9695417f248178c63a9f318c6e0c56cb917cb837/gemma-4-E4B-it.litertlm"
@@ -66,9 +67,14 @@ jobs:
                               val tempEngine = Engine(config)
                               tempEngine.initialize() 
                               engine = tempEngine
-                              Log.i("HEAVYNET_DAEMON", "Hardware Locks Acquired Successfully in Sub-Process.")
+                              Log.i("HEAVYNET_DAEMON", "Hardware Locks Acquired Successfully.")
                           }
-                          val response = engine!!.createConversation().sendMessage(prompt)
+                          
+                          // STRICT MEMORY MANAGEMENT: Flush C++ pointer before creating new session
+                          activeConversation?.close()
+                          activeConversation = engine!!.createConversation()
+                          
+                          val response = activeConversation!!.sendMessage(prompt)
                           File(outputPath).writeText("{\"status\":\"success\", \"response\":\"${response.toString().replace("\"", "\\\"").replace("\n", "\\n")}\"}")
                       } catch (e: Exception) {
                           Log.e("HEAVYNET_DAEMON", "NATIVE INIT CRASH: ${e.message}")
@@ -77,7 +83,12 @@ jobs:
                   }
                   return START_NOT_STICKY
               }
-              override fun onDestroy() { super.onDestroy(); hardwareExecutor.shutdown(); engine?.close() }
+              override fun onDestroy() { 
+                  super.onDestroy()
+                  activeConversation?.close()
+                  engine?.close()
+                  hardwareExecutor.shutdown() 
+              }
               override fun onBind(intent: Intent?): IBinder? = null
           }
           KOTLIN_EOF
