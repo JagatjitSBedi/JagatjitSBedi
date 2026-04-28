@@ -85,14 +85,14 @@ jobs:
         run: |
           sed -i 's|<application|<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />\n<application|g' ${{ env.MANIFEST_PATH }}
           sed -i 's|</application>|<service android:name="com.google.ai.edge.gallery.HeadlessNpuService" android:exported="true" android:process=":npu_worker" />\n</application>|g' ${{ env.MANIFEST_PATH }}
-      - name: Decode Keystore
+      - name: Decode Keystore to Absolute Workspace
         run: |
-          echo "${{ secrets.KEYSTORE_B64 }}" | base64 --decode > ${{ env.GRADLE_DIR }}/app/npu_master.jks
-      - name: Build APK with Persistent Signature
+          echo "${{ secrets.KEYSTORE_B64 }}" | base64 --decode > $GITHUB_WORKSPACE/npu_master.jks
+      - name: Build APK with Absolute Path Signature
         run: |
           cd ${{ env.GRADLE_DIR }}
           chmod +x gradlew
-          ./gradlew assembleDebug -Pandroid.injected.signing.store.file=app/npu_master.jks -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASS }} -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.KEYSTORE_PASS }} --no-daemon -q
+          ./gradlew assembleDebug -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/npu_master.jks -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASS }} -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} -Pandroid.injected.signing.key.password=${{ secrets.KEYSTORE_PASS }} --no-daemon -q
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
