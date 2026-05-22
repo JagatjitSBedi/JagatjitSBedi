@@ -10,14 +10,26 @@ jobs:
       id: setup-ndk
       with:
         ndk-version: r26b
-    - name: Compile Exynos C++ Bridge
+    - name: Dynamically Locate and Compile C++ Bridge
       run: |
+        echo "Scanning Cloud Matrix for CMake files..."
+        CMAKE_FILE=$(find . -name "CMakeLists.txt" | head -n 1)
+        if [ -z "$CMAKE_FILE" ]; then
+            echo "CRITICAL: CMakeLists.txt is physically missing from the Cloud clone!"
+            ls -laR
+            exit 1
+        fi
+        
+        CMAKE_DIR=$(dirname "$CMAKE_FILE")
+        echo "Target Locked. Booting Compiler in: $CMAKE_DIR"
+        cd "$CMAKE_DIR"
+        
         mkdir -p build && cd build
         cmake -DCMAKE_TOOLCHAIN_FILE=${{ steps.setup-ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
               -DANDROID_ABI=arm64-v8a \
               -DANDROID_PLATFORM=android-33 ..
         make
-    - name: Locate and Upload Compiled NDK Library
+    - name: Secure Compiled NDK Library
       uses: actions/upload-artifact@v4
       with:
         name: exynos-bridge-arm64-v8a
