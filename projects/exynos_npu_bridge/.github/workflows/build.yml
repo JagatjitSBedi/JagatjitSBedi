@@ -17,8 +17,8 @@ jobs:
               -DANDROID_ABI=arm64-v8a \
               -DANDROID_PLATFORM=android-33 ..
         make
-    - name: Upload Compiled NDK Library
+    - name: Locate and Upload Compiled NDK Library
       uses: actions/upload-artifact@v4
       with:
         name: exynos-bridge-arm64-v8a
-        path: build/libexynos_bridge.so
+        path: '**/*.so'
